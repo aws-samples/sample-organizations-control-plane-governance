@@ -1,0 +1,11 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: Amazon S3 policies must enable all four S3 Block Public Access settings.
+# Organization S3 policies must enable all four S3 Block Public Access settings.
+rule s3_policy_block_public_access_all when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type == "S3_POLICY" {
+    configuration.Content.s3_attributes.public_access_block_configuration."@@assign" == "all"
+        <<S3 policy does not set Block Public Access to "all">>
+}

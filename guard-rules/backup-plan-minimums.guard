@@ -1,0 +1,41 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: Backup policy plan rules must run on a schedule, keep backups for at least 35 days when a deletion lifecycle is set, and copy backups to another vault.
+# Backup policy plan rules must: run on a schedule, keep backups >= 35 days (when a deletion
+# lifecycle is set), and copy backups to another Region/account vault (disaster recovery).
+# NOTE: numeric values are STRINGS in backup policies ("delete_after_days": "100") and Guard 2.x
+# cannot convert them, so the minimum is a regex: 35-99, or any 3+ digit number.
+let rules = configuration.Content.plans.*.rules.*
+
+rule backup_policy when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type == "BACKUP_POLICY" {
+    %rules !empty
+        <<Backup policy defines no plan rules>>
+}
+
+rule backup_rule_has_schedule when backup_policy {
+    %rules[*] {
+        schedule_expression exists
+            <<Backup rule has no schedule_expression>>
+    }
+}
+
+rule backup_rule_min_retention when backup_policy {
+    %rules[*] {
+        when lifecycle.delete_after_days exists {
+            lifecycle.delete_after_days."@@assign" == /^(3[5-9]|[4-9][0-9]|[1-9][0-9]{2,})$/
+                <<Backup retention (delete_after_days) is below 35 days>>
+        }
+    }
+}
+
+rule backup_rule_has_copy_action when backup_policy {
+    %rules[*] {
+        copy_actions exists
+            <<Backup rule has no copy_actions (no cross-Region/cross-account copy)>>
+        copy_actions !empty
+            <<Backup rule has no copy_actions (no cross-Region/cross-account copy)>>
+    }
+}

@@ -1,0 +1,12 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: Customer managed policies should be attached to a target. An unattached policy can mean a control was detached.
+# Hygiene: customer-managed policies should be attached somewhere; unattached policies are
+# drift/clutter and may indicate a guardrail that was silently detached.
+rule policy_is_attached when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.AwsManaged == false {
+    configuration.TargetIds !empty
+        <<Customer-managed policy is not attached to any root, OU, or account>>
+}

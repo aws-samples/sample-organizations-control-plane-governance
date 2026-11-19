@@ -1,0 +1,26 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# AWS Config custom policy rule (Guard runtime: guard-2.x.x)
+# Description: Accounts tagged purpose=<tagValue> must be in the approved OU subtree.
+# Deployed as: orggov-account-approved-parent-ou  (management account, us-east-1)
+# Scope:       AWS::Organizations::Account   Trigger: configuration changes (periodic not supported)
+#
+# Accounts tagged purpose=<tagValue> must sit anywhere under the approved OU subtree.
+# Parameter:   tagValue -> e.g. governed   (single value - console-safe)
+#
+# Notes (verified):
+#  - Parameters are read with CONFIG_RULE_PARAMETERS.<key>; other names fail the whole rule
+#    with InvalidPropertyReference.
+#  - The tag KEY is literal (Guard 2.x has no dynamic key lookup); the VALUE is a parameter.
+#  - Regex must be literal in Guard 2.x (cannot come from a parameter). Write "/" as \x2F;
+#    "\/" is a parse error. The trailing \x2F prevents lookalike-ID matches.
+#  - Field names are API casing (Paths, ParentIds) - NOT the camelCase shown in the console timeline.
+#  - Untagged accounts SKIP -> NOT_APPLICABLE in Config.
+#  - Approved subtree: o-exampleorgid / r-exmp / ou-exmp-approved and everything below it - EDIT per organization.
+rule tagged_account_in_approved_ou when
+    resourceType == "AWS::Organizations::Account"
+    tags.purpose exists
+    tags.purpose == CONFIG_RULE_PARAMETERS.tagValue {
+    configuration.Paths[*] == /^o-exampleorgid\x2Fr-exmp\x2Fou-exmp-approved\x2F/
+        <<Account carries the governed tag but is not under the approved OU subtree>>
+}

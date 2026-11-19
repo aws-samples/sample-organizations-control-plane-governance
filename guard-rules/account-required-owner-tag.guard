@@ -1,0 +1,16 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Account | Params: none
+# Description: Every account must have an owner tag.
+# Every account must carry an "owner" tag (key is literal - Guard 2.x has no dynamic key lookup).
+# The empty-value check runs only when the tag exists. Otherwise Guard 2.x adds its own
+# key-retrieval error to the annotation of an account that has no "owner" tag.
+rule account_has_owner_tag when resourceType == "AWS::Organizations::Account" {
+    tags.owner exists
+        <<Account is missing the required "owner" tag>>
+}
+
+rule account_owner_tag_not_empty when account_has_owner_tag {
+    tags.owner != ""
+        <<Account "owner" tag is empty>>
+}

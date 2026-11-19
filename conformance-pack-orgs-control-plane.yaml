@@ -1,0 +1,958 @@
+##################################################################################
+# Conformance Pack: AWS Organizations Control-Plane Security & Governance
+#
+# Description: Guard (guard-2.x.x) custom policy rules that evaluate the AWS Config
+# configuration items for the AWS Organizations control plane: the organization, accounts,
+# OUs, every in-scope policy type (SCP, RCP, EC2, S3, GuardDuty, Bedrock, AI opt-out, Backup,
+# Upgrade rollout, Tag, Chat applications, Security Hub, Inspector) and the org resource policy.
+#
+# DEPLOY AS AN ACCOUNT-LEVEL PACK IN THE MANAGEMENT ACCOUNT, us-east-1 - the only place the
+# AWS::Organizations::* configuration items are recorded. All rules are change-triggered
+# (Guard rules cannot be periodic).
+#
+# Total Rules: 24
+#
+# Coverage:
+# - Organization: 2 rules
+# - Account: 4 rules
+# - OrganizationalUnit: 1 rules
+# - Policy: 16 rules
+# - ResourcePolicy: 1 rules
+#
+# IMPORTANT: Rules with Configurable Parameters (single values only - pack parameters are
+# strings, so list parameters are not used)
+# 1. org-feature-set-all
+#    - expectedFeatureSet: ExpectedFeatureSet
+# 2. org-expected-management-account
+#    - managementAccountId: ManagementAccountId
+# 3. account-not-at-root
+#    - managementAccountId: ManagementAccountId
+# 4. account-approved-parent-ou
+#    - tagValue: GovernedTagValue
+#
+# IMPORTANT: Environment-specific literals to edit per customer (Guard 2.x regex must be literal)
+# 1. account-email-domain - corporate email domain (example\.com placeholder)
+# 2. bedrock-guardrail-enforcement - management account ID in the guardrail ARN regex
+# 3. tagged-account-in-approved-ou - organization / root / approved OU path regex
+#
+# Source of truth: guard-rules/*.guard (tested locally and live). Regenerate with
+#   python3 build-conformance-pack.py
+##################################################################################
+
+Parameters:
+  ExpectedFeatureSet:
+    Type: String
+    Default: "ALL"
+    Description: "Expected AWS Organizations feature set"
+  ManagementAccountId:
+    Type: String
+    Default: "111122223333"
+    Description: "Management account ID"
+  GovernedTagValue:
+    Type: String
+    Default: "governed"
+    Description: "Value of the 'purpose' tag that marks accounts governed by the approved-OU rule"
+
+Resources:
+
+  # ============================================================
+  # Organization - org identity (2 rules)
+  # ============================================================
+
+  OrgFeatureSetAll:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: org-feature-set-all
+      Description: "The organization must use all features, which SCPs, RCPs, and every declarative policy type require."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Organization
+      InputParameters:
+        expectedFeatureSet:
+          Ref: ExpectedFeatureSet
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule org_feature_set_expected when resourceType == "AWS::Organizations::Organization" {
+                configuration.FeatureSet == CONFIG_RULE_PARAMETERS.expectedFeatureSet
+                    <<Organization FeatureSet is not the expected value (expectedFeatureSet)>>
+            }
+
+  OrgExpectedManagementAccount:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: org-expected-management-account
+      Description: "The organization must have the expected management account."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Organization
+      InputParameters:
+        managementAccountId:
+          Ref: ManagementAccountId
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule org_management_account_expected when resourceType == "AWS::Organizations::Organization" {
+                configuration.ManagementAccountId == CONFIG_RULE_PARAMETERS.managementAccountId
+                    <<Organization management account is not the expected account (managementAccountId)>>
+            }
+
+  # ============================================================
+  # Account - placement, ownership, identity (4 rules)
+  # ============================================================
+
+  AccountNotAtRoot:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: account-not-at-root
+      Description: "Member accounts must not sit directly under the organization root, where they miss every OU-level policy."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Account
+      InputParameters:
+        managementAccountId:
+          Ref: ManagementAccountId
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule account_not_at_root when
+                resourceType == "AWS::Organizations::Account"
+                configuration.AccountId != CONFIG_RULE_PARAMETERS.managementAccountId {
+                configuration.ParentIds[*] != /^r-/
+                    <<Member account sits directly under the organization root>>
+            }
+
+  AccountApprovedParentOu:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: account-approved-parent-ou
+      Description: "Accounts tagged purpose=<tagValue> must be in the approved OU subtree."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Account
+      InputParameters:
+        tagValue:
+          Ref: GovernedTagValue
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule tagged_account_in_approved_ou when
+                resourceType == "AWS::Organizations::Account"
+                tags.purpose exists
+                tags.purpose == CONFIG_RULE_PARAMETERS.tagValue {
+                configuration.Paths[*] == /^o-exampleorgid\x2Fr-exmp\x2Fou-exmp-approved\x2F/
+                    <<Account carries the governed tag but is not under the approved OU subtree>>
+            }
+
+  AccountRequiredOwnerTag:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: account-required-owner-tag
+      Description: "Every account must have an owner tag."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Account
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule account_has_owner_tag when resourceType == "AWS::Organizations::Account" {
+                tags.owner exists
+                    <<Account is missing the required "owner" tag>>
+            }
+            rule account_owner_tag_not_empty when account_has_owner_tag {
+                tags.owner != ""
+                    <<Account "owner" tag is empty>>
+            }
+
+  AccountEmailDomain:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: account-email-domain
+      Description: "Account root-user email addresses must use the approved corporate domain, because the root email is the account recovery path."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Account
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule account_email_corporate_domain when resourceType == "AWS::Organizations::Account" {
+                configuration.Email == /(?i)@example\.com$/
+                    <<Account root email is not on the approved corporate domain>>
+            }
+
+  # ============================================================
+  # Organizational unit - structure (1 rules)
+  # ============================================================
+
+  OuMaxDepth:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: ou-max-depth
+      Description: "OUs must not be nested more than 3 levels below the root."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::OrganizationalUnit
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule ou_depth_within_limit when resourceType == "AWS::Organizations::OrganizationalUnit" {
+                configuration.Path == /^o-[a-z0-9]+\x2Fr-[a-z0-9]+(\x2Fou-[a-z0-9]+-[a-z0-9]+){1,3}\x2F$/
+                    <<OU is nested more than 3 levels below the root>>
+            }
+
+  # ============================================================
+  # Policy - authorization and declarative policies (16 rules)
+  # ============================================================
+
+  ScpNoAllowStar:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: scp-no-allow-star
+      Description: "Customer managed SCPs must not contain an Allow statement with Action \"*\"."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule scp_no_allow_star when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type == "SERVICE_CONTROL_POLICY"
+                configuration.AwsManaged == false {
+                configuration.Content.Statement[*] {
+                    when Effect == "Allow" {
+                        Action[*] != "*"
+                            <<Customer-managed SCP contains an Allow statement with Action "*">>
+                    }
+                    Effect exists
+                }
+            }
+
+  ScpCustomNotOnRoot:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: scp-custom-not-on-root
+      Description: "Customer managed SCPs must be attached to OUs or accounts, not to the root."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule scp_custom_not_on_root when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type == "SERVICE_CONTROL_POLICY"
+                configuration.AwsManaged == false
+                configuration.TargetIds !empty {
+                configuration.TargetIds[*] != /^r-/
+                    <<Customer-managed SCP is attached directly to the organization root>>
+            }
+
+  RcpDenyUsesOrgCondition:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: rcp-deny-uses-org-condition
+      Description: "Customer managed RCP Deny statements must be scoped with aws:PrincipalOrgID."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule rcp_deny_uses_principal_org_id when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type == "RESOURCE_CONTROL_POLICY"
+                configuration.AwsManaged == false {
+                let denies = configuration.Content.Statement[ Effect == "Deny" ]
+                when %denies !empty {
+                    %denies[*] {
+                        Condition exists
+                            <<RCP Deny statement has no Condition (would deny everyone)>>
+                        Condition.StringNotEqualsIfExists."aws:PrincipalOrgID" exists OR
+                        Condition.StringNotEquals."aws:PrincipalOrgID" exists OR
+                        Condition.StringEqualsIfExists."aws:PrincipalOrgID" exists OR
+                        Condition.StringEquals."aws:PrincipalOrgID" exists
+                            <<RCP Deny statement is not scoped with aws:PrincipalOrgID>>
+                    }
+                }
+            }
+
+  S3PolicyBpaAll:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: s3-policy-bpa-all
+      Description: "Amazon S3 policies must enable all four S3 Block Public Access settings."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule s3_policy_block_public_access_all when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type == "S3_POLICY" {
+                configuration.Content.s3_attributes.public_access_block_configuration."@@assign" == "all"
+                    <<S3 policy does not set Block Public Access to "all">>
+            }
+
+  Ec2DeclarativeSecureValues:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: ec2-declarative-secure-values
+      Description: "Amazon EC2 declarative policies must set every attribute they define to a secure value."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            let ec2 = configuration.Content.ec2_attributes
+            rule ec2_policy when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type == "DECLARATIVE_POLICY_EC2" {
+                %ec2 exists
+            }
+            rule ec2_vpc_bpa_not_off when ec2_policy {
+                when %ec2.vpc_block_public_access exists {
+                    %ec2.vpc_block_public_access.internet_gateway_block.mode."@@assign" IN ["block_ingress", "block_bidirectional"]
+                        <<VPC Block Public Access mode must be block_ingress or block_bidirectional>>
+                }
+            }
+            rule ec2_image_bpa_blocked when ec2_policy {
+                when %ec2.image_block_public_access exists {
+                    %ec2.image_block_public_access.state."@@assign" == "block_new_sharing"
+                        <<Image Block Public Access must be block_new_sharing>>
+                }
+            }
+            rule ec2_snapshot_bpa_blocked when ec2_policy {
+                when %ec2.snapshot_block_public_access exists {
+                    %ec2.snapshot_block_public_access.state."@@assign" IN ["block_all_sharing", "block_new_sharing"]
+                        <<Snapshot Block Public Access must block sharing>>
+                }
+            }
+            rule ec2_serial_console_disabled when ec2_policy {
+                when %ec2.serial_console_access exists {
+                    %ec2.serial_console_access.status."@@assign" == "disabled"
+                        <<EC2 serial console access must be disabled>>
+                }
+            }
+            rule ec2_imds_v2_required when ec2_policy {
+                when %ec2.instance_metadata_defaults exists {
+                    %ec2.instance_metadata_defaults.http_tokens."@@assign" == "required"
+                        <<IMDS defaults must require IMDSv2 (http_tokens = required)>>
+                }
+            }
+            rule ec2_allowed_images_active when ec2_policy {
+                when %ec2.allowed_images_settings exists {
+                    %ec2.allowed_images_settings.state."@@assign" IN ["enabled", "audit_mode"]
+                        <<Allowed Images Settings must be enabled or audit_mode>>
+                }
+            }
+            rule ec2_vpc_encryption_managed when ec2_policy {
+                when %ec2.vpc_encryption_control exists {
+                    %ec2.vpc_encryption_control.mode."@@assign" IN ["attempt_monitor", "attempt_enforce"]
+                        <<VPC Encryption Controls must be attempt_monitor or attempt_enforce>>
+                }
+            }
+
+  GuarddutyFoundationalEnabled:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: guardduty-foundational-enabled
+      Description: "GuardDuty policies must keep foundational threat detection enabled in the default block and in every Region override."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule guardduty_foundational_enabled when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type == "GUARDDUTY_POLICY" {
+                configuration.Content.guardduty.enablement.* {
+                    foundational exists
+                        <<GuardDuty enablement block does not configure foundational detection>>
+                    foundational.status."@@assign" == "enabled"
+                        <<GuardDuty foundational detection is not enabled in every enablement block>>
+                }
+            }
+
+  PolicyAttached:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: policy-attached
+      Description: "Customer managed policies should be attached to a target. An unattached policy can mean a control was detached."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule policy_is_attached when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.AwsManaged == false {
+                configuration.TargetIds !empty
+                    <<Customer-managed policy is not attached to any root, OU, or account>>
+            }
+
+  BedrockGuardrailEnforcement:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: bedrock-guardrail-enforcement
+      Description: "Amazon Bedrock policies must use a management account guardrail pinned to a numeric version, guard all content (comprehensive), and not exclude models."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            let configs = configuration.Content.bedrock.guardrail_inference.*.*[ identifier exists ]
+            rule bedrock_policy when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type == "BEDROCK_POLICY" {
+                %configs !empty
+                    <<Bedrock policy defines no guardrail configuration>>
+            }
+            rule bedrock_guardrail_pinned_mgmt_owned when bedrock_policy {
+                %configs.identifier."@@assign" == /^arn:aws(-us-gov)?:bedrock:[a-z0-9-]+:111122223333:guardrail\x2F[a-z0-9]+:[0-9]+$/
+                    <<Guardrail must be owned by the management account and pinned to a numeric version (not DRAFT)>>
+            }
+            rule bedrock_system_comprehensive when bedrock_policy {
+                %configs[*] {
+                    when selective_content_guarding.system exists {
+                        selective_content_guarding.system."@@assign" == "comprehensive"
+                            <<System prompts must be guarded comprehensively ("selective" lets callers skip the guardrail)>>
+                    }
+                }
+            }
+            rule bedrock_messages_comprehensive when bedrock_policy {
+                %configs[*] {
+                    when selective_content_guarding.messages exists {
+                        selective_content_guarding.messages."@@assign" == "comprehensive"
+                            <<Messages must be guarded comprehensively ("selective" lets callers limit what is evaluated)>>
+                    }
+                }
+            }
+            rule bedrock_no_model_exclusions when bedrock_policy {
+                %configs[*] {
+                    when model_enforcement.excluded_models exists {
+                        model_enforcement.excluded_models."@@assign" empty
+                            <<Bedrock policy excludes models from guardrail enforcement>>
+                    }
+                }
+            }
+
+  AiOptoutAllServices:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: ai-optout-all-services
+      Description: "AI services opt-out policies must opt out all services by default and must not opt any service back in."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule ai_optout_policy when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type == "AISERVICES_OPT_OUT_POLICY" {
+                configuration.Content.services exists
+            }
+            rule ai_optout_default when ai_optout_policy {
+                configuration.Content.services.default.opt_out_policy."@@assign" == "optOut"
+                    <<AI opt-out policy has no "default": optOut entry (unlisted services stay at the AWS default)>>
+            }
+            rule ai_optout_no_optin when ai_optout_policy {
+                configuration.Content.services.* {
+                    when opt_out_policy exists {
+                        opt_out_policy."@@assign" == "optOut"
+                            <<AI opt-out policy opts a service IN (content may be used to improve AI services)>>
+                    }
+                }
+            }
+
+  BackupPlanMinimums:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: backup-plan-minimums
+      Description: "Backup policy plan rules must run on a schedule, keep backups for at least 35 days when a deletion lifecycle is set, and copy backups to another vault."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            let rules = configuration.Content.plans.*.rules.*
+            rule backup_policy when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type == "BACKUP_POLICY" {
+                %rules !empty
+                    <<Backup policy defines no plan rules>>
+            }
+            rule backup_rule_has_schedule when backup_policy {
+                %rules[*] {
+                    schedule_expression exists
+                        <<Backup rule has no schedule_expression>>
+                }
+            }
+            rule backup_rule_min_retention when backup_policy {
+                %rules[*] {
+                    when lifecycle.delete_after_days exists {
+                        lifecycle.delete_after_days."@@assign" == /^(3[5-9]|[4-9][0-9]|[1-9][0-9]{2,})$/
+                            <<Backup retention (delete_after_days) is below 35 days>>
+                    }
+                }
+            }
+            rule backup_rule_has_copy_action when backup_policy {
+                %rules[*] {
+                    copy_actions exists
+                        <<Backup rule has no copy_actions (no cross-Region/cross-account copy)>>
+                    copy_actions !empty
+                        <<Backup rule has no copy_actions (no cross-Region/cross-account copy)>>
+                }
+            }
+
+  UpgradeRolloutSafeOrder:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: upgrade-rollout-safe-order
+      Description: "Upgrade rollout policies must set an explicit default patch order and must not put production first through the tag override."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule upgrade_rollout_policy when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type == "UPGRADE_ROLLOUT_POLICY" {
+                configuration.Content.upgrade_rollout exists
+            }
+            rule upgrade_rollout_explicit_default when upgrade_rollout_policy {
+                configuration.Content.upgrade_rollout.default.patch_order."@@assign" IN ["first", "second", "last"]
+                    <<Upgrade rollout policy has no explicit default patch_order (resources default to "second")>>
+            }
+            rule upgrade_rollout_production_not_first when upgrade_rollout_policy {
+                when configuration.Content.upgrade_rollout.tags.environment.tag_values.production exists {
+                    configuration.Content.upgrade_rollout.tags.environment.tag_values.production.patch_order."@@assign" != "first"
+                        <<Production-tagged resources are set to receive upgrades first>>
+                }
+            }
+
+  TagPolicyWellFormed:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: tag-policy-well-formed
+      Description: "Tag policies must fix the key capitalization of every tag, and every enforced tag must define allowed values."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule tag_policy when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type == "TAG_POLICY" {
+                configuration.Content.tags exists
+            }
+            rule tag_policy_keys_have_tag_key when tag_policy {
+                configuration.Content.tags.* {
+                    tag_key exists
+                        <<Tag policy entry does not set tag_key (capitalization is not standardized)>>
+                }
+            }
+            rule tag_policy_enforced_have_values when tag_policy {
+                configuration.Content.tags.* {
+                    when enforced_for exists {
+                        tag_value exists
+                            <<Tag policy enforces a tag without defining allowed values (tag_value)>>
+                    }
+                }
+            }
+
+  ChatAppsRestricted:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: chat-apps-restricted
+      Description: "Chat applications policies must disable chat clients by default, limit Slack and Teams to approved workspaces and tenants, and not allow channel-level IAM roles."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            let chat = configuration.Content.chatbot
+            rule chat_policy when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type == "CHATBOT_POLICY" {
+                %chat exists
+            }
+            rule chat_default_disabled when chat_policy {
+                %chat.default.client."@@assign" == "disabled"
+                    <<Chat applications are not disabled by default>>
+            }
+            rule chat_slack_restricted when chat_policy {
+                when %chat.platforms.slack.client."@@assign" == "enabled" {
+                    %chat.platforms.slack.workspaces exists
+                        <<Slack is enabled without an approved workspace list>>
+                }
+            }
+            rule chat_teams_restricted when chat_policy {
+                when %chat.platforms.microsoft_teams.client."@@assign" == "enabled" {
+                    %chat.platforms.microsoft_teams.tenants exists
+                        <<Microsoft Teams is enabled without an approved tenant list>>
+                }
+            }
+            rule chat_no_channel_role when chat_policy {
+                when %chat.platforms.slack.default.supported_role_settings exists {
+                    %chat.platforms.slack.default.supported_role_settings."@@assign"[*] != "channel_role"
+                        <<Slack allows channel-level IAM roles (shared by all channel members)>>
+                }
+                when %chat.platforms.microsoft_teams.default.supported_role_settings exists {
+                    %chat.platforms.microsoft_teams.default.supported_role_settings."@@assign"[*] != "channel_role"
+                        <<Teams allows channel-level IAM roles (shared by all channel members)>>
+                }
+            }
+
+  SecurityhubAllRegions:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: securityhub-all-regions
+      Description: "Security Hub policies must enable all supported Regions and disable none."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            let sh = configuration.Content.securityhub
+            rule securityhub_policy when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type == "SECURITYHUB_POLICY" {
+                %sh exists
+            }
+            rule securityhub_enabled_all_regions when securityhub_policy {
+                %sh.enable_in_regions."@@append"[*] IN ["ALL_SUPPORTED"] OR
+                %sh.enable_in_regions."@@assign"[*] IN ["ALL_SUPPORTED"]
+                    <<Security Hub policy does not enable ALL_SUPPORTED Regions>>
+            }
+            rule securityhub_disables_no_region when securityhub_policy {
+                when %sh.disable_in_regions."@@append" exists {
+                    %sh.disable_in_regions."@@append" empty
+                        <<Security Hub policy disables Security Hub in one or more Regions>>
+                }
+                when %sh.disable_in_regions."@@assign" exists {
+                    %sh.disable_in_regions."@@assign" empty
+                        <<Security Hub policy disables Security Hub in one or more Regions>>
+                }
+            }
+
+  InspectorRequiredScans:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: inspector-required-scans
+      Description: "Amazon Inspector policies must enable EC2, ECR, and Lambda scanning in all supported Regions and disable none."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            let en = configuration.Content.inspector.enablement
+            rule inspector_policy when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type == "INSPECTOR_POLICY" {
+                %en exists
+            }
+            rule inspector_ec2_scanning when inspector_policy {
+                %en.ec2_scanning.enable_in_regions."@@append"[*] IN ["ALL_SUPPORTED"] OR
+                %en.ec2_scanning.enable_in_regions."@@assign"[*] IN ["ALL_SUPPORTED"]
+                    <<Inspector EC2 scanning is not enabled in ALL_SUPPORTED Regions>>
+                when %en.ec2_scanning.disable_in_regions."@@append" exists {
+                    %en.ec2_scanning.disable_in_regions."@@append" empty
+                        <<Inspector EC2 scanning is disabled in one or more Regions>>
+                }
+                when %en.ec2_scanning.disable_in_regions."@@assign" exists {
+                    %en.ec2_scanning.disable_in_regions."@@assign" empty
+                        <<Inspector EC2 scanning is disabled in one or more Regions>>
+                }
+            }
+            rule inspector_ecr_scanning when inspector_policy {
+                %en.ecr_scanning.enable_in_regions."@@append"[*] IN ["ALL_SUPPORTED"] OR
+                %en.ecr_scanning.enable_in_regions."@@assign"[*] IN ["ALL_SUPPORTED"]
+                    <<Inspector ECR scanning is not enabled in ALL_SUPPORTED Regions>>
+                when %en.ecr_scanning.disable_in_regions."@@append" exists {
+                    %en.ecr_scanning.disable_in_regions."@@append" empty
+                        <<Inspector ECR scanning is disabled in one or more Regions>>
+                }
+                when %en.ecr_scanning.disable_in_regions."@@assign" exists {
+                    %en.ecr_scanning.disable_in_regions."@@assign" empty
+                        <<Inspector ECR scanning is disabled in one or more Regions>>
+                }
+            }
+            rule inspector_lambda_scanning when inspector_policy {
+                %en.lambda_standard_scanning.enable_in_regions."@@append"[*] IN ["ALL_SUPPORTED"] OR
+                %en.lambda_standard_scanning.enable_in_regions."@@assign"[*] IN ["ALL_SUPPORTED"]
+                    <<Inspector Lambda standard scanning is not enabled in ALL_SUPPORTED Regions>>
+                when %en.lambda_standard_scanning.disable_in_regions."@@append" exists {
+                    %en.lambda_standard_scanning.disable_in_regions."@@append" empty
+                        <<Inspector Lambda standard scanning is disabled in one or more Regions>>
+                }
+                when %en.lambda_standard_scanning.disable_in_regions."@@assign" exists {
+                    %en.lambda_standard_scanning.disable_in_regions."@@assign" empty
+                        <<Inspector Lambda standard scanning is disabled in one or more Regions>>
+                }
+            }
+
+  SecurityServicesChildLocked:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: security-services-child-locked
+      Description: "Root-attached Security Hub and Amazon Inspector policies must stop child policies from changing the Region lists."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::Policy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            let root_targets = configuration.TargetIds[ this == /^r-/ ]
+            let sh = configuration.Content.securityhub
+            let en = configuration.Content.inspector.enablement
+            rule central_security_policy when
+                resourceType == "AWS::Organizations::Policy"
+                configuration.Type IN ["SECURITYHUB_POLICY", "INSPECTOR_POLICY"]
+                %root_targets !empty {
+                configuration.Content exists
+            }
+            rule securityhub_regions_locked when
+                central_security_policy
+                configuration.Type == "SECURITYHUB_POLICY" {
+                %sh.enable_in_regions."@@operators_allowed_for_child_policies"[*] == "@@none"
+                    <<Security Hub enable_in_regions can be changed by child policies (set @@operators_allowed_for_child_policies to ["@@none"])>>
+                %sh.disable_in_regions."@@operators_allowed_for_child_policies"[*] == "@@none"
+                    <<Security Hub disable_in_regions can be changed by child policies (set @@operators_allowed_for_child_policies to ["@@none"])>>
+            }
+            rule inspector_regions_locked when
+                central_security_policy
+                configuration.Type == "INSPECTOR_POLICY" {
+                %en.ec2_scanning.disable_in_regions."@@operators_allowed_for_child_policies"[*] == "@@none"
+                    <<Inspector EC2 disable_in_regions can be changed by child policies>>
+                %en.ecr_scanning.disable_in_regions."@@operators_allowed_for_child_policies"[*] == "@@none"
+                    <<Inspector ECR disable_in_regions can be changed by child policies>>
+                %en.lambda_standard_scanning.disable_in_regions."@@operators_allowed_for_child_policies"[*] == "@@none"
+                    <<Inspector Lambda disable_in_regions can be changed by child policies>>
+            }
+
+  # ============================================================
+  # Resource policy - delegation of Organizations management (1 rules)
+  # ============================================================
+
+  OrgResourcePolicyReview:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: org-resource-policy-review
+      Description: "Flags the organization resource policy for periodic human review, because its content is redacted in AWS Config. Tag it reviewed=true after review."
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::Organizations::ResourcePolicy
+      Source:
+        Owner: CUSTOM_POLICY
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+          - EventSource: aws.config
+            MessageType: OversizedConfigurationItemChangeNotification
+        CustomPolicyDetails:
+          PolicyRuntime: guard-2.x.x
+          EnableDebugLogDelivery: false
+          PolicyText: |
+            rule org_resource_policy_reviewed when resourceType == "AWS::Organizations::ResourcePolicy" {
+                tags.reviewed exists
+                    <<Organization resource policy exists - review its delegations (content is not visible to Config) and tag reviewed=true>>
+                tags.reviewed == "true"
+                    <<Organization resource policy is not marked reviewed=true>>
+            }

@@ -1,0 +1,61 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: Amazon Inspector policies must enable EC2, ECR, and Lambda scanning in all supported Regions and disable none.
+# Inspector policies must enable EC2, ECR and Lambda standard scanning in ALL_SUPPORTED Regions and
+# disable none. Scan types are named explicitly (no wildcards) for predictable Guard 2.x behavior.
+let en = configuration.Content.inspector.enablement
+
+rule inspector_policy when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type == "INSPECTOR_POLICY" {
+    %en exists
+}
+
+rule inspector_ec2_scanning when inspector_policy {
+    %en.ec2_scanning.enable_in_regions."@@append"[*] IN ["ALL_SUPPORTED"] OR
+    %en.ec2_scanning.enable_in_regions."@@assign"[*] IN ["ALL_SUPPORTED"]
+        <<Inspector EC2 scanning is not enabled in ALL_SUPPORTED Regions>>
+    # NOTE: `empty` is TRUE for a missing key, so "@@append empty OR @@assign empty" would pass
+    # whenever one form is absent. Check each form only when it exists.
+    when %en.ec2_scanning.disable_in_regions."@@append" exists {
+        %en.ec2_scanning.disable_in_regions."@@append" empty
+            <<Inspector EC2 scanning is disabled in one or more Regions>>
+    }
+    when %en.ec2_scanning.disable_in_regions."@@assign" exists {
+        %en.ec2_scanning.disable_in_regions."@@assign" empty
+            <<Inspector EC2 scanning is disabled in one or more Regions>>
+    }
+}
+
+rule inspector_ecr_scanning when inspector_policy {
+    %en.ecr_scanning.enable_in_regions."@@append"[*] IN ["ALL_SUPPORTED"] OR
+    %en.ecr_scanning.enable_in_regions."@@assign"[*] IN ["ALL_SUPPORTED"]
+        <<Inspector ECR scanning is not enabled in ALL_SUPPORTED Regions>>
+    # NOTE: `empty` is TRUE for a missing key, so "@@append empty OR @@assign empty" would pass
+    # whenever one form is absent. Check each form only when it exists.
+    when %en.ecr_scanning.disable_in_regions."@@append" exists {
+        %en.ecr_scanning.disable_in_regions."@@append" empty
+            <<Inspector ECR scanning is disabled in one or more Regions>>
+    }
+    when %en.ecr_scanning.disable_in_regions."@@assign" exists {
+        %en.ecr_scanning.disable_in_regions."@@assign" empty
+            <<Inspector ECR scanning is disabled in one or more Regions>>
+    }
+}
+
+rule inspector_lambda_scanning when inspector_policy {
+    %en.lambda_standard_scanning.enable_in_regions."@@append"[*] IN ["ALL_SUPPORTED"] OR
+    %en.lambda_standard_scanning.enable_in_regions."@@assign"[*] IN ["ALL_SUPPORTED"]
+        <<Inspector Lambda standard scanning is not enabled in ALL_SUPPORTED Regions>>
+    # NOTE: `empty` is TRUE for a missing key, so "@@append empty OR @@assign empty" would pass
+    # whenever one form is absent. Check each form only when it exists.
+    when %en.lambda_standard_scanning.disable_in_regions."@@append" exists {
+        %en.lambda_standard_scanning.disable_in_regions."@@append" empty
+            <<Inspector Lambda standard scanning is disabled in one or more Regions>>
+    }
+    when %en.lambda_standard_scanning.disable_in_regions."@@assign" exists {
+        %en.lambda_standard_scanning.disable_in_regions."@@assign" empty
+            <<Inspector Lambda standard scanning is disabled in one or more Regions>>
+    }
+}

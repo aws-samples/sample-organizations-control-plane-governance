@@ -1,0 +1,20 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: Customer managed SCPs must not contain an Allow statement with Action "*".
+# Customer-managed SCPs must not contain an Allow statement with Action "*".
+# (AWS-managed FullAWSAccess is excluded via AwsManaged.)
+rule scp_no_allow_star when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type == "SERVICE_CONTROL_POLICY"
+    configuration.AwsManaged == false {
+    # Evaluate every statement so SCPs with only Deny statements report COMPLIANT
+    # (not NOT_APPLICABLE). Action may be a string or a list - [*] covers both.
+    configuration.Content.Statement[*] {
+        when Effect == "Allow" {
+            Action[*] != "*"
+                <<Customer-managed SCP contains an Allow statement with Action "*">>
+        }
+        Effect exists
+    }
+}

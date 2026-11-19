@@ -1,0 +1,51 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: Amazon Bedrock policies must use a management account guardrail pinned to a numeric version, guard all content (comprehensive), and not exclude models.
+# Bedrock policies (org-enforced guardrails on every inference call) must:
+#  - reference a guardrail owned by the MANAGEMENT account, pinned to a numeric version (never DRAFT)
+#  - evaluate ALL content: selective_content_guarding "selective" lets the CALLER decide what is
+#    guarded ("system: selective" evaluates nothing when no guard tags are sent). Use "comprehensive"
+#    (also the default when the setting is omitted).
+#  - not exclude models from enforcement
+# Edit the management account ID in the regex per customer (Guard 2.x regex must be literal).
+let configs = configuration.Content.bedrock.guardrail_inference.*.*[ identifier exists ]
+
+rule bedrock_policy when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type == "BEDROCK_POLICY" {
+    %configs !empty
+        <<Bedrock policy defines no guardrail configuration>>
+}
+
+rule bedrock_guardrail_pinned_mgmt_owned when bedrock_policy {
+    %configs.identifier."@@assign" == /^arn:aws(-us-gov)?:bedrock:[a-z0-9-]+:111122223333:guardrail\x2F[a-z0-9]+:[0-9]+$/
+        <<Guardrail must be owned by the management account and pinned to a numeric version (not DRAFT)>>
+}
+
+rule bedrock_system_comprehensive when bedrock_policy {
+    %configs[*] {
+        when selective_content_guarding.system exists {
+            selective_content_guarding.system."@@assign" == "comprehensive"
+                <<System prompts must be guarded comprehensively ("selective" lets callers skip the guardrail)>>
+        }
+    }
+}
+
+rule bedrock_messages_comprehensive when bedrock_policy {
+    %configs[*] {
+        when selective_content_guarding.messages exists {
+            selective_content_guarding.messages."@@assign" == "comprehensive"
+                <<Messages must be guarded comprehensively ("selective" lets callers limit what is evaluated)>>
+        }
+    }
+}
+
+rule bedrock_no_model_exclusions when bedrock_policy {
+    %configs[*] {
+        when model_enforcement.excluded_models exists {
+            model_enforcement.excluded_models."@@assign" empty
+                <<Bedrock policy excludes models from guardrail enforcement>>
+        }
+    }
+}

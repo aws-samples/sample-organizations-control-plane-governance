@@ -1,0 +1,14 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: Customer managed SCPs must be attached to OUs or accounts, not to the root.
+# Customer-managed SCPs must be attached to OUs/accounts, not the root (limits blast radius;
+# the management account is not affected by SCPs anyway). Unattached policies are not evaluated here.
+rule scp_custom_not_on_root when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type == "SERVICE_CONTROL_POLICY"
+    configuration.AwsManaged == false
+    configuration.TargetIds !empty {
+    configuration.TargetIds[*] != /^r-/
+        <<Customer-managed SCP is attached directly to the organization root>>
+}

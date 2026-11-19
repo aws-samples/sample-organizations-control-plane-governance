@@ -1,0 +1,28 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: Tag policies must fix the key capitalization of every tag, and every enforced tag must define allowed values.
+# Tag policies: every defined tag must fix its key capitalization (tag_key), and any tag that is
+# enforced (enforced_for) must also define allowed values (tag_value).
+# Reminder: tag policies do NOT require tags to exist - use an SCP/Config rule for "must be tagged".
+rule tag_policy when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type == "TAG_POLICY" {
+    configuration.Content.tags exists
+}
+
+rule tag_policy_keys_have_tag_key when tag_policy {
+    configuration.Content.tags.* {
+        tag_key exists
+            <<Tag policy entry does not set tag_key (capitalization is not standardized)>>
+    }
+}
+
+rule tag_policy_enforced_have_values when tag_policy {
+    configuration.Content.tags.* {
+        when enforced_for exists {
+            tag_value exists
+                <<Tag policy enforces a tag without defining allowed values (tag_value)>>
+        }
+    }
+}

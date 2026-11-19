@@ -1,0 +1,10 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Account | Params: none (regex must be literal in 2.x)
+# Description: Account root-user email addresses must use the approved corporate domain, because the root email is the account recovery path.
+# Root-user email is the account-recovery path: it must be on a corporate domain.
+# Edit the domain below per customer.
+rule account_email_corporate_domain when resourceType == "AWS::Organizations::Account" {
+    configuration.Email == /(?i)@example\.com$/
+        <<Account root email is not on the approved corporate domain>>
+}

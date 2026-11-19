@@ -1,0 +1,16 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: GuardDuty policies must keep foundational threat detection enabled in the default block and in every Region override.
+# GuardDuty policies: every enablement block (default and each Region override) must keep
+# foundational threat detection enabled - a Region block fully REPLACES the default.
+rule guardduty_foundational_enabled when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type == "GUARDDUTY_POLICY" {
+    configuration.Content.guardduty.enablement.* {
+        foundational exists
+            <<GuardDuty enablement block does not configure foundational detection>>
+        foundational.status."@@assign" == "enabled"
+            <<GuardDuty foundational detection is not enabled in every enablement block>>
+    }
+}

@@ -1,0 +1,44 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: Chat applications policies must disable chat clients by default, limit Slack and Teams to approved workspaces and tenants, and not allow channel-level IAM roles.
+# Chat applications policies (Amazon Q Developer in chat / AWS Chatbot): chat clients disabled by
+# default; when Slack/Teams are enabled they must be limited to approved workspaces/tenants, and
+# channel-level IAM roles (shared by everyone in a channel) must not be allowed.
+let chat = configuration.Content.chatbot
+
+rule chat_policy when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type == "CHATBOT_POLICY" {
+    %chat exists
+}
+
+rule chat_default_disabled when chat_policy {
+    %chat.default.client."@@assign" == "disabled"
+        <<Chat applications are not disabled by default>>
+}
+
+rule chat_slack_restricted when chat_policy {
+    when %chat.platforms.slack.client."@@assign" == "enabled" {
+        %chat.platforms.slack.workspaces exists
+            <<Slack is enabled without an approved workspace list>>
+    }
+}
+
+rule chat_teams_restricted when chat_policy {
+    when %chat.platforms.microsoft_teams.client."@@assign" == "enabled" {
+        %chat.platforms.microsoft_teams.tenants exists
+            <<Microsoft Teams is enabled without an approved tenant list>>
+    }
+}
+
+rule chat_no_channel_role when chat_policy {
+    when %chat.platforms.slack.default.supported_role_settings exists {
+        %chat.platforms.slack.default.supported_role_settings."@@assign"[*] != "channel_role"
+            <<Slack allows channel-level IAM roles (shared by all channel members)>>
+    }
+    when %chat.platforms.microsoft_teams.default.supported_role_settings exists {
+        %chat.platforms.microsoft_teams.default.supported_role_settings."@@assign"[*] != "channel_role"
+            <<Teams allows channel-level IAM roles (shared by all channel members)>>
+    }
+}

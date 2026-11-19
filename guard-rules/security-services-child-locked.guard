@@ -1,0 +1,38 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: Root-attached Security Hub and Amazon Inspector policies must stop child policies from changing the Region lists.
+# Central Security Hub / Inspector enablement policies must stop child policies from changing the
+# Region lists. With "@@all" (or the operator list omitted), an OU-level child policy can ADD Regions
+# to disable_in_regions and switch the service off there.
+# Applies only to policies attached at the root (filter on TargetIds starting with "r-").
+let root_targets = configuration.TargetIds[ this == /^r-/ ]
+let sh = configuration.Content.securityhub
+let en = configuration.Content.inspector.enablement
+
+rule central_security_policy when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type IN ["SECURITYHUB_POLICY", "INSPECTOR_POLICY"]
+    %root_targets !empty {
+    configuration.Content exists
+}
+
+rule securityhub_regions_locked when
+    central_security_policy
+    configuration.Type == "SECURITYHUB_POLICY" {
+    %sh.enable_in_regions."@@operators_allowed_for_child_policies"[*] == "@@none"
+        <<Security Hub enable_in_regions can be changed by child policies (set @@operators_allowed_for_child_policies to ["@@none"])>>
+    %sh.disable_in_regions."@@operators_allowed_for_child_policies"[*] == "@@none"
+        <<Security Hub disable_in_regions can be changed by child policies (set @@operators_allowed_for_child_policies to ["@@none"])>>
+}
+
+rule inspector_regions_locked when
+    central_security_policy
+    configuration.Type == "INSPECTOR_POLICY" {
+    %en.ec2_scanning.disable_in_regions."@@operators_allowed_for_child_policies"[*] == "@@none"
+        <<Inspector EC2 disable_in_regions can be changed by child policies>>
+    %en.ecr_scanning.disable_in_regions."@@operators_allowed_for_child_policies"[*] == "@@none"
+        <<Inspector ECR disable_in_regions can be changed by child policies>>
+    %en.lambda_standard_scanning.disable_in_regions."@@operators_allowed_for_child_policies"[*] == "@@none"
+        <<Inspector Lambda disable_in_regions can be changed by child policies>>
+}

@@ -1,0 +1,11 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Account | Params: managementAccountId
+# Description: Member accounts must not sit directly under the organization root, where they miss every OU-level policy.
+# Member accounts directly under the root bypass all OU-level guardrails.
+rule account_not_at_root when
+    resourceType == "AWS::Organizations::Account"
+    configuration.AccountId != CONFIG_RULE_PARAMETERS.managementAccountId {
+    configuration.ParentIds[*] != /^r-/
+        <<Member account sits directly under the organization root>>
+}

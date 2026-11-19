@@ -1,0 +1,14 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::ResourcePolicy | Params: none
+# Description: Flags the organization resource policy for periodic human review, because its content is redacted in AWS Config. Tag it reviewed=true after review.
+# Informational: the organization resource policy delegates Organizations management to member
+# accounts. Its Content is REDACTED in Config, so it cannot be inspected here - flag its existence
+# for periodic human review (or use a Lambda rule with DescribeResourcePolicy for content checks).
+# Pass by tagging the resource policy reviewed=true after review.
+rule org_resource_policy_reviewed when resourceType == "AWS::Organizations::ResourcePolicy" {
+    tags.reviewed exists
+        <<Organization resource policy exists - review its delegations (content is not visible to Config) and tag reviewed=true>>
+    tags.reviewed == "true"
+        <<Organization resource policy is not marked reviewed=true>>
+}

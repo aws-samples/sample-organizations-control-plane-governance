@@ -1,0 +1,9 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Organization | Params: managementAccountId
+# Description: The organization must have the expected management account.
+# Detects an unexpected organization / management account.
+rule org_management_account_expected when resourceType == "AWS::Organizations::Organization" {
+    configuration.ManagementAccountId == CONFIG_RULE_PARAMETERS.managementAccountId
+        <<Organization management account is not the expected account (managementAccountId)>>
+}

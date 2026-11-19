@@ -1,0 +1,25 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: AI services opt-out policies must opt out all services by default and must not opt any service back in.
+# AI services opt-out policies must opt out by default and must not opt any service back in
+# (opting in allows AWS to use your content to improve AI services).
+rule ai_optout_policy when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type == "AISERVICES_OPT_OUT_POLICY" {
+    configuration.Content.services exists
+}
+
+rule ai_optout_default when ai_optout_policy {
+    configuration.Content.services.default.opt_out_policy."@@assign" == "optOut"
+        <<AI opt-out policy has no "default": optOut entry (unlisted services stay at the AWS default)>>
+}
+
+rule ai_optout_no_optin when ai_optout_policy {
+    configuration.Content.services.* {
+        when opt_out_policy exists {
+            opt_out_policy."@@assign" == "optOut"
+                <<AI opt-out policy opts a service IN (content may be used to improve AI services)>>
+        }
+    }
+}

@@ -1,0 +1,56 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: Amazon EC2 declarative policies must set every attribute they define to a secure value.
+# EC2 declarative policies: any attribute that IS set must be set to a secure value.
+# Each block only applies when the policy contains that attribute.
+let ec2 = configuration.Content.ec2_attributes
+
+rule ec2_policy when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type == "DECLARATIVE_POLICY_EC2" {
+    %ec2 exists
+}
+
+rule ec2_vpc_bpa_not_off when ec2_policy {
+    when %ec2.vpc_block_public_access exists {
+        %ec2.vpc_block_public_access.internet_gateway_block.mode."@@assign" IN ["block_ingress", "block_bidirectional"]
+            <<VPC Block Public Access mode must be block_ingress or block_bidirectional>>
+    }
+}
+rule ec2_image_bpa_blocked when ec2_policy {
+    when %ec2.image_block_public_access exists {
+        %ec2.image_block_public_access.state."@@assign" == "block_new_sharing"
+            <<Image Block Public Access must be block_new_sharing>>
+    }
+}
+rule ec2_snapshot_bpa_blocked when ec2_policy {
+    when %ec2.snapshot_block_public_access exists {
+        %ec2.snapshot_block_public_access.state."@@assign" IN ["block_all_sharing", "block_new_sharing"]
+            <<Snapshot Block Public Access must block sharing>>
+    }
+}
+rule ec2_serial_console_disabled when ec2_policy {
+    when %ec2.serial_console_access exists {
+        %ec2.serial_console_access.status."@@assign" == "disabled"
+            <<EC2 serial console access must be disabled>>
+    }
+}
+rule ec2_imds_v2_required when ec2_policy {
+    when %ec2.instance_metadata_defaults exists {
+        %ec2.instance_metadata_defaults.http_tokens."@@assign" == "required"
+            <<IMDS defaults must require IMDSv2 (http_tokens = required)>>
+    }
+}
+rule ec2_allowed_images_active when ec2_policy {
+    when %ec2.allowed_images_settings exists {
+        %ec2.allowed_images_settings.state."@@assign" IN ["enabled", "audit_mode"]
+            <<Allowed Images Settings must be enabled or audit_mode>>
+    }
+}
+rule ec2_vpc_encryption_managed when ec2_policy {
+    when %ec2.vpc_encryption_control exists {
+        %ec2.vpc_encryption_control.mode."@@assign" IN ["attempt_monitor", "attempt_enforce"]
+            <<VPC Encryption Controls must be attempt_monitor or attempt_enforce>>
+    }
+}

@@ -1,0 +1,27 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: Upgrade rollout policies must set an explicit default patch order and must not put production first through the tag override.
+# Upgrade rollout policies (order of RDS/Aurora automatic minor version upgrades) must:
+#  - set an explicit default patch_order (resources without one silently default to "second")
+#  - never put production first via the tag override (tag key "environment" is literal - edit per customer)
+# Template (not enabled by default; edit the OU IDs to use it): policies attached only to production OUs
+# should have default "last":
+#   when configuration.TargetIds[*] IN ["ou-prod-1","ou-prod-2"] { ...default.patch_order."@@assign" == "last" }
+rule upgrade_rollout_policy when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type == "UPGRADE_ROLLOUT_POLICY" {
+    configuration.Content.upgrade_rollout exists
+}
+
+rule upgrade_rollout_explicit_default when upgrade_rollout_policy {
+    configuration.Content.upgrade_rollout.default.patch_order."@@assign" IN ["first", "second", "last"]
+        <<Upgrade rollout policy has no explicit default patch_order (resources default to "second")>>
+}
+
+rule upgrade_rollout_production_not_first when upgrade_rollout_policy {
+    when configuration.Content.upgrade_rollout.tags.environment.tag_values.production exists {
+        configuration.Content.upgrade_rollout.tags.environment.tag_values.production.patch_order."@@assign" != "first"
+            <<Production-tagged resources are set to receive upgrades first>>
+    }
+}

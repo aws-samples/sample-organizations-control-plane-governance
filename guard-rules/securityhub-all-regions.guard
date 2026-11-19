@@ -1,0 +1,32 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: Security Hub policies must enable all supported Regions and disable none.
+# Security Hub policies must enable ALL_SUPPORTED Regions and disable none.
+# Values may be written with @@append or @@assign - both are accepted (explicit OR, no `some`).
+let sh = configuration.Content.securityhub
+
+rule securityhub_policy when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type == "SECURITYHUB_POLICY" {
+    %sh exists
+}
+
+rule securityhub_enabled_all_regions when securityhub_policy {
+    %sh.enable_in_regions."@@append"[*] IN ["ALL_SUPPORTED"] OR
+    %sh.enable_in_regions."@@assign"[*] IN ["ALL_SUPPORTED"]
+        <<Security Hub policy does not enable ALL_SUPPORTED Regions>>
+}
+
+rule securityhub_disables_no_region when securityhub_policy {
+    # NOTE: `empty` is TRUE for a missing key, so "@@append empty OR @@assign empty" would pass
+    # whenever one form is absent. Check each form only when it exists.
+    when %sh.disable_in_regions."@@append" exists {
+        %sh.disable_in_regions."@@append" empty
+            <<Security Hub policy disables Security Hub in one or more Regions>>
+    }
+    when %sh.disable_in_regions."@@assign" exists {
+        %sh.disable_in_regions."@@assign" empty
+            <<Security Hub policy disables Security Hub in one or more Regions>>
+    }
+}

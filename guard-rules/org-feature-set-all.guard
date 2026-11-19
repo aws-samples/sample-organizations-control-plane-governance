@@ -1,0 +1,9 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Organization | Params: expectedFeatureSet (e.g. ALL)
+# Description: The organization must use all features, which SCPs, RCPs, and every declarative policy type require.
+# Losing "ALL" disables SCPs, RCPs and every declarative policy type.
+rule org_feature_set_expected when resourceType == "AWS::Organizations::Organization" {
+    configuration.FeatureSet == CONFIG_RULE_PARAMETERS.expectedFeatureSet
+        <<Organization FeatureSet is not the expected value (expectedFeatureSet)>>
+}

@@ -1,0 +1,26 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Guard 2.x | Scope: AWS::Organizations::Policy | Params: none
+# Description: Customer managed RCP Deny statements must be scoped with aws:PrincipalOrgID.
+# Customer-managed RCP Deny statements must be scoped with aws:PrincipalOrgID (the data-perimeter
+# pattern). A Deny keyed on a single account ID (e.g. aws:PrincipalAccount) is flagged for review.
+rule rcp_deny_uses_principal_org_id when
+    resourceType == "AWS::Organizations::Policy"
+    configuration.Type == "RESOURCE_CONTROL_POLICY"
+    configuration.AwsManaged == false {
+    let denies = configuration.Content.Statement[ Effect == "Deny" ]
+    when %denies !empty {
+        %denies[*] {
+            Condition exists
+                <<RCP Deny statement has no Condition (would deny everyone)>>
+            # Name the operators explicitly. Do NOT use `some Condition.*."aws:PrincipalOrgID" exists`:
+            # Config's Guard 2.x engine does not fail it when the key is absent (verified live),
+            # although local cfn-guard 3.x does.
+            Condition.StringNotEqualsIfExists."aws:PrincipalOrgID" exists OR
+            Condition.StringNotEquals."aws:PrincipalOrgID" exists OR
+            Condition.StringEqualsIfExists."aws:PrincipalOrgID" exists OR
+            Condition.StringEquals."aws:PrincipalOrgID" exists
+                <<RCP Deny statement is not scoped with aws:PrincipalOrgID>>
+        }
+    }
+}
